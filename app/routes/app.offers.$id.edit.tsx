@@ -3,16 +3,30 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json, redirect, unstable_parseMultipartFormData, unstable_createMemoryUploadHandler } from "@remix-run/node";
 import { useActionData, useNavigation, useSubmit, useLoaderData } from "@remix-run/react";
 import {
-    Page, Layout, Card, TextField, Button, BlockStack, DropZone, Banner, Text, Combobox, Listbox, Icon, Link, InlineStack, RadioButton,
-    Select
+    Page, Layout, Card, TextField, Button, BlockStack, DropZone, Banner, Text, Combobox, Listbox, Icon, Link, InlineStack, RadioButton
 } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server";
 import { parseCSV } from "../utils/csv-parser.server";
 import prisma from "../db.server";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     const { admin } = await authenticate.admin(request);
+    const offerId = Number(params.id);
+
+    const offer = await prisma.offer.findUnique({
+        where: { id: offerId },
+    });
+
+    if (!offer) {
+        throw new Response("Not Found", { status: 404 });
+    }
+
+    if (offer.status !== "PENDING") {
+        throw new Response("Offer cannot be edited", { status: 400 });
+    }
+
+    // Fetch vendors for autocomplete
     const response = await admin.graphql(`{
     shop {
       productVendors(first: 250) {
@@ -24,11 +38,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }`);
     const data = await response.json();
     const vendors = data.data.shop.productVendors.edges.map((edge: any) => edge.node);
-    return json({ vendors });
+
+    return json({ offer, vendors });
 };
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = async ({ request, params }: ActionFunctionArgs) => {
     const { admin } = await authenticate.admin(request);
+    const offerId = Number(params.id);
+
     const uploadHandler = unstable_createMemoryUploadHandler({
         maxPartSize: 5_000_000,
     });
@@ -46,7 +63,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const discountStr = formData.get("discount") as string;
     const file = formData.get("file") as File;
 
-    if (!title || !vendor || !priceType || !pricingFormat || !file) {
+    if (!title || !vendor || !priceType || !pricingFormat) {
         return json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -58,73 +75,75 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return json({ error: "Markup and Discount are required for Base pricing format" }, { status: 400 });
     }
 
-    const fileContent = await file.text();
-    let items;
-    try {
-        items = parseCSV(fileContent, pricingFormat);
-    } catch (e: any) {
-        return json({ error: `Invalid CSV: ${e.message}` }, { status: 400 });
-    }
-
-    // Calculate prices if BASE format
     const markup = markupStr ? parseFloat(markupStr) : 0;
     const discount = discountStr ? parseFloat(discountStr) : 0;
 
-    const offerItems = items.map((item) => {
-        let offerPrice = parseFloat(item.price);
-        if (pricingFormat === "BASE") {
-            // Formula: (Base Price * Markup) - (Base Price * Markup) * Discount%
-            // Simplified: (Base * Markup) * (1 - Discount/100)
-            const basePrice = parseFloat(item.price);
-            offerPrice = (basePrice * markup) * (1 - discount / 100);
+    const updateData: any = {
+        title,
+        vendor,
+        priceType,
+        pricingFormat,
+        markup: pricingFormat === "BASE" ? markup : null,
+        discount: pricingFormat === "BASE" ? discount : null,
+        startDate: priceType === "OFFER" ? (startDate ? new Date(startDate) : null) : null,
+        endDate: priceType === "OFFER" ? (endDate ? new Date(endDate) : null) : null,
+        tags: tags || "",
+    };
+
+    // If file is provided, parse and replace items
+    if (file && file.size > 0) {
+        const fileContent = await file.text();
+        let items;
+        try {
+            items = parseCSV(fileContent, pricingFormat);
+        } catch (e: any) {
+            return json({ error: `Invalid CSV: ${e.message}` }, { status: 400 });
         }
-        return {
-            sku: item.sku,
-            offerPrice
+
+        updateData.items = {
+            deleteMany: {}, // Delete existing items
+            create: items.map((item) => {
+                let offerPrice = parseFloat(item.price);
+                if (pricingFormat === "BASE") {
+                    const basePrice = parseFloat(item.price);
+                    offerPrice = (basePrice * markup) * (1 - discount / 100);
+                }
+                return {
+                    sku: item.sku,
+                    offerPrice
+                };
+            }),
         };
+    }
+
+    await prisma.offer.update({
+        where: { id: offerId },
+        data: updateData,
     });
 
-    await prisma.offer.create({
-        data: {
-            title,
-            vendor,
-            priceType,
-            pricingFormat,
-            markup: pricingFormat === "BASE" ? markup : null,
-            discount: pricingFormat === "BASE" ? discount : null,
-            startDate: startDate ? new Date(startDate) : null,
-            endDate: endDate ? new Date(endDate) : null,
-            tags: tags || "",
-            status: "PENDING",
-            items: {
-                create: offerItems,
-            },
-        },
-    });
-
-    return redirect("/app");
+    return redirect(`/app/offers/${offerId}`);
 };
 
-export default function NewOffer() {
-    const { vendors } = useLoaderData<typeof loader>();
+export default function EditOffer() {
+    const { offer, vendors } = useLoaderData<typeof loader>();
     const actionData = useActionData<typeof action>();
     const submit = useSubmit();
     const nav = useNavigation();
     const isSubmitting = nav.state === "submitting";
 
-    const [title, setTitle] = useState("");
-    const [priceType, setPriceType] = useState("OFFER"); // OFFER, REGULAR
-    const [pricingFormat, setPricingFormat] = useState("ACTUAL"); // ACTUAL, BASE
-    const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
-    const [markup, setMarkup] = useState("1.0");
-    const [discount, setDiscount] = useState("0");
-    const [tags, setTags] = useState("");
+    const [title, setTitle] = useState(offer.title || "");
+    const [priceType, setPriceType] = useState(offer.priceType || "OFFER");
+    const [pricingFormat, setPricingFormat] = useState(offer.pricingFormat || "ACTUAL");
+    const [startDate, setStartDate] = useState(offer.startDate ? new Date(offer.startDate).toISOString().split('T')[0] : "");
+    const [endDate, setEndDate] = useState(offer.endDate ? new Date(offer.endDate).toISOString().split('T')[0] : "");
+    const [markup, setMarkup] = useState(offer.markup ? offer.markup.toString() : "1.0");
+    const [discount, setDiscount] = useState(offer.discount ? offer.discount.toString() : "0");
+    const [tags, setTags] = useState(offer.tags || "");
     const [file, setFile] = useState<File | null>(null);
 
     // Vendor Autocomplete State
-    const [selectedVendor, setSelectedVendor] = useState("");
-    const [inputValue, setInputValue] = useState("");
+    const [selectedVendor, setSelectedVendor] = useState(offer.vendor);
+    const [inputValue, setInputValue] = useState(offer.vendor);
     const [options, setOptions] = useState(vendors);
 
     const updateText = useCallback(
@@ -199,10 +218,10 @@ export default function NewOffer() {
 
     return (
         <Page
-            title="Create New Offer"
-            backAction={{ content: "Offers", url: "/app" }}
+            title="Edit Offer"
+            backAction={{ content: "Back", url: `/app/offers/${offer.id}` }}
             primaryAction={{
-                content: "Create Offer",
+                content: "Save Changes",
                 onAction: handleSubmit,
                 loading: isSubmitting,
                 disabled: isSubmitting,
@@ -217,12 +236,14 @@ export default function NewOffer() {
                     )}
                     <Card>
                         <BlockStack gap="500">
+                            <Banner tone="info">
+                                <p>Editing a pending offer. Uploading a new CSV will replace the existing items.</p>
+                            </Banner>
                             <TextField
                                 label="Offer Title"
                                 value={title}
                                 onChange={setTitle}
                                 autoComplete="off"
-                                placeholder="e.g., Summer Sale 2025"
                             />
                             <Combobox
                                 activator={
@@ -342,7 +363,7 @@ export default function NewOffer() {
                                             <Text as="p" variant="bodyMd">{file.name} ({(file.size / 1024).toFixed(2)} KB)</Text>
                                         </BlockStack>
                                     ) : (
-                                        <DropZone.FileUpload />
+                                        <DropZone.FileUpload actionHint="Upload to replace items" />
                                     )}
                                 </DropZone>
                             </BlockStack>

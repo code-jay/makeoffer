@@ -37,9 +37,20 @@ export async function applyOfferPrices(admin: any, offerId: number) {
         const variant = data.data.productVariants.edges[0]?.node;
 
         if (variant) {
+            // Store original price based on Offer Type
+            // If REGULAR, we want to simulate a permanent change.
+            // The user requested: "Offer Price will also be same as Original/Current Price".
+            // So we set originalPrice to the NEW offerPrice, so that 'revert' (if it happens)
+            // keeps the price as is (or effectively disables revert to old price).
+            // If OFFER, we store the actual old variant.price so we can revert to it.
+            let priceToStore = parseFloat(variant.price);
+            if (offer.priceType === "REGULAR") {
+                priceToStore = item.offerPrice.toNumber(); // Assuming offerPrice is Decimal
+            }
+
             await prisma.offerItem.update({
                 where: { id: item.id },
-                data: { originalPrice: parseFloat(variant.price) },
+                data: { originalPrice: priceToStore },
             });
 
             // Update Price

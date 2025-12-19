@@ -37,12 +37,16 @@ model Offer {
   id          Int      @id @default(autoincrement())
   title       String?  // Optional for backward compatibility with existing records
   vendor      String
-  startDate   DateTime
-  endDate     DateTime
+  startDate   DateTime?
+  endDate     DateTime?
   tags        String
   status      String   @default("PENDING") // PENDING, ACTIVE, COMPLETED
   items       OfferItem[]
   createdAt   DateTime @default(now())
+  priceType   String   @default("OFFER") // OFFER, REGULAR
+  pricingFormat String @default("ACTUAL") // ACTUAL, BASE
+  markup      Decimal?
+  discount    Decimal?
 }
 
 model OfferItem {

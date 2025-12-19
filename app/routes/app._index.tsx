@@ -191,9 +191,15 @@ export default function OffersList() {
                                                     {productTitle}
                                                 </Text>
                                             )}
-                                            <Text as="p" variant="bodySm" tone="subdued">
-                                                {new Date(startDate).toLocaleDateString()} - {new Date(endDate).toLocaleDateString()}
-                                            </Text>
+                                            {startDate && endDate ? (
+                                                <Text as="p" variant="bodySm" tone="subdued">
+                                                    {new Date(startDate).toLocaleDateString()} - {new Date(endDate).toLocaleDateString()}
+                                                </Text>
+                                            ) : (
+                                                <Text as="p" variant="bodySm" tone="subdued">
+                                                    Permanent (Regular Price)
+                                                </Text>
+                                            )}
                                             {tags && <Text as="p" variant="bodySm">{tags}</Text>}
                                         </BlockStack>
                                     </ResourceItem>
