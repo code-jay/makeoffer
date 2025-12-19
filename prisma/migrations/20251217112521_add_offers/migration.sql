@@ -1,0 +1,20 @@
+-- CreateTable
+CREATE TABLE "Offer" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "vendor" TEXT NOT NULL,
+    "startDate" DATETIME NOT NULL,
+    "endDate" DATETIME NOT NULL,
+    "tags" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "OfferItem" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "sku" TEXT NOT NULL,
+    "originalPrice" DECIMAL,
+    "offerPrice" DECIMAL NOT NULL,
+    "offerId" INTEGER NOT NULL,
+    CONSTRAINT "OfferItem_offerId_fkey" FOREIGN KEY ("offerId") REFERENCES "Offer" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
